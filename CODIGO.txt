@@ -1,0 +1,58 @@
+import pandas as pd
+import re
+from pathlib import Path
+
+# === Ruta base y archivos ===
+ruta_base = Path(r"D:\OneDrive - Allianz\12_Descarga archivos de valoración\Bases")
+archivo_excel = ruta_base / "PFTIT597 - 2025-04-01.CSV"
+archivo_sx = next(ruta_base.glob("SX*.001"), None)
+
+# === Leer archivo Excel ===
+df_excel = pd.read_csv(archivo_excel, sep=';', encoding='latin1')
+df_excel.columns = df_excel.columns.str.strip()
+df_excel['ISIN'] = df_excel['ISIN'].astype(str).str.strip().str.upper()
+
+# === Limpiar y convertir precios del Excel sin agregar columnas
+def limpiar_precio(valor):
+    try:
+        s = str(valor).strip().replace(' ', '').replace('.', '').replace(',', '.')
+        return float(s)
+    except:
+        return None
+
+precio_limpio = df_excel['Precio'].apply(limpiar_precio)
+precio_normalizado = (precio_limpio / 10000).round(3)
+
+# === Crear diccionario de precios SX por ISIN buscado en toda la línea
+precio_sx_por_isin = {}
+
+if archivo_sx and archivo_sx.exists():
+    with open(archivo_sx, 'r', encoding='latin1') as f:
+        for line in f:
+            for isin_excel in df_excel['ISIN'].unique():
+                if isin_excel in line:
+                    precios = re.findall(r'\d{1,3}\.\d{3}', line)  # Solo precios válidos
+                    precios_sx = [float(p) for p in precios]
+                    if isin_excel not in precio_sx_por_isin:
+                        precio_sx_por_isin[isin_excel] = []
+                    precio_sx_por_isin[isin_excel].extend(precios_sx)
+
+# === Función de comparación con tolerancia del 1%
+def cruzo(row, p_normalizado):
+    isin = row.ISIN
+    precios_encontrados = precio_sx_por_isin.get(isin, [])
+    for p_sx in precios_encontrados:
+        if abs(p_normalizado - p_sx) / max(p_normalizado, p_sx) < 0.01:
+            return 'cruzado'
+    return ''
+
+# === Aplicar cruce sin agregar columnas auxiliares
+df_excel['cruce'] = [
+    cruzo(row, p_norm) if pd.notnull(p_norm) else ''
+    for row, p_norm in zip(df_excel.itertuples(index=False), precio_normalizado)
+]
+
+# === Guardar resultado final solo con columnas originales + cruce
+columnas_finales = [col for col in df_excel.columns]
+archivo_salida = ruta_base / "resultado_cruce_excel_vs_sx_final.xlsx"
+df_excel[columnas_finales].to_excel(archivo_salida, index=False)
