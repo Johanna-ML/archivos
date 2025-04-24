@@ -1,0 +1,115 @@
+# =========================
+# CARGAR ARCHIVO BASE EXCEL
+# =========================
+ruta_base = r'D:\OneDrive - Allianz\12_Descarga archivos de valoración\Bases\PFTIT597 - 2025-04-01.CSV'
+base = pd.read_csv(ruta_base, sep=';', encoding='latin1')
+base.drop(index=0, inplace=True)
+base.columns = base.columns.str.strip().str.replace(' ', '', regex=False)
+base.reset_index(drop=True, inplace=True)
+
+# ================
+# CARGAR ARCHIVO SX
+# ================
+ruta_sx = r'D:\OneDrive - Allianz\12_Descarga archivos de valoración\Bases\SX033125.001'
+SX = pd.read_fwf(ruta_sx, widths=[7, 13, 12, 19, 8, 8, 10, 7, 4, 30, 11, 27, 31, 83], header=None)
+SX.drop(index=0, inplace=True)
+SX.drop(columns=0, inplace=True)
+SX.columns = ['A', 'id', 'B', 'C', 'fecha', 'D', 'E', 'F', 'G', 'importe', 'H', 'I', 'J']
+
+# ================
+# CARGAR ARCHIVO SW
+# ================
+ruta_sw = r'D:\OneDrive - Allianz\12_Descarga archivos de valoración\Bases\SW033125.002'
+SW = pd.read_fwf(ruta_sw, widths=[18, 12, 18], header=None)
+SW.columns = ['id', 'fecha', 'importe']
+
+# Limpiar campos
+SW['id'] = SW['id'].str[7:]
+SW['importe'] = SW['importe'].str[6:]
+
+# Eliminar caracteres no numéricos
+SW['importe'] = SW['importe'].apply(lambda x: re.sub(r'[^\d.,-]', '', str(x)))
+SW['importe'] = SW['importe'].str.replace(',', '.', regex=False)  # Convertir comas a puntos
+SW['importe'] = SW['importe'].replace('', '0')  # Reemplazar vacíos por ceros
+SW['importe'] = SW['importe'].astype(float)
+
+# ================
+# CARGAR ARCHIVO MX
+# ================
+ruta_mx = r'D:\OneDrive - Allianz\12_Descarga archivos de valoración\Bases\MX033125.txt'
+MX = pd.read_csv(ruta_mx, sep=',', encoding='latin1')
+
+# ======================================
+# CARGAR ARCHIVO TITULOS PARTICIPATIVOS
+# ======================================
+ruta_titulos = r'D:\OneDrive - Allianz\12_Descarga archivos de valoración\Bases\titulos_participativos_valoracion_20250331.txt'
+titulos = pd.read_fwf(ruta_titulos, widths=[19, 12, 20], header=None)
+titulos.columns = ['id', 'fecha', 'importe']
+titulos['importe'] = titulos['importe'].apply(lambda x: f"{x:.6f}")
+titulos['id'] = titulos['id'].str[7:]
+
+# ===========================
+# CRUCE CON LA BASE PRINCIPAL
+# ===========================
+base['CHECK COD BOLSA'] = base['Cod.Bolsa'].isin(SW['id']).map({True: 'SI', False: 'NO'})
+base['MX_CHECK ISIN'] = base['ISIN'].isin(MX['ISIN']).map({True: 'SI', False: 'NO'})
+base['titulos_CHECK ISIN'] = base['ISIN'].isin(titulos['id']).map({True: 'SI', False: 'NO'})
+base['SX_CHECK ISIN'] = base['ISIN'].isin(SX['id']).map({True: 'SI', False: 'NO'})
+
+
+
+# === Ruta base y archivos ===
+ruta_base = Path(r"D:\OneDrive - Allianz\12_Descarga archivos de valoración\Bases")
+archivo_excel = ruta_base / "PFTIT597 - 2025-04-01.CSV"
+archivo_sx = next(ruta_base.glob("SX*.001"), None)
+
+# === Leer archivo Excel ===
+df_excel = pd.read_csv(archivo_excel, sep=';', encoding='latin1')
+df_excel.columns = df_excel.columns.str.strip()
+df_excel['ISIN'] = df_excel['ISIN'].astype(str).str.strip().str.upper()
+
+# === Limpiar y convertir precios del Excel sin agregar columnas
+def limpiar_precio(valor):
+    try:
+        s = str(valor).strip().replace(' ', '').replace('.', '').replace(',', '.')
+        return float(s)
+    except:
+        return None
+
+precio_limpio = df_excel['Precio'].apply(limpiar_precio)
+precio_normalizado = (precio_limpio / 10000).round(3)
+
+# === Crear diccionario de precios SX por ISIN buscado en toda la línea
+precio_sx_por_isin = {}
+
+if archivo_sx and archivo_sx.exists():
+    with open(archivo_sx, 'r', encoding='latin1') as f:
+        for line in f:
+            for isin_excel in df_excel['ISIN'].unique():
+                if isin_excel in line:
+                    precios = re.findall(r'\d{1,3}\.\d{3}', line)  # Solo precios válidos
+                    precios_sx = [float(p) for p in precios]
+                    if isin_excel not in precio_sx_por_isin:
+                        precio_sx_por_isin[isin_excel] = []
+                    precio_sx_por_isin[isin_excel].extend(precios_sx)
+
+# === Función de comparación con tolerancia del 1%
+def cruzo(row, p_normalizado):
+    isin = row.ISIN
+    precios_encontrados = precio_sx_por_isin.get(isin, [])
+    for p_sx in precios_encontrados:
+        if abs(p_normalizado - p_sx) / max(p_normalizado, p_sx) < 0.01:
+            return 'cruzado'
+    return ''
+
+# === Aplicar cruce sin agregar columnas auxiliares
+df_excel['cruce'] = [
+    cruzo(row, p_norm) if pd.notnull(p_norm) else ''
+    for row, p_norm in zip(df_excel.itertuples(index=False), precio_normalizado)
+]
+
+# === Guardar resultado final solo con columnas originales + cruce
+columnas_finales = [col for col in df_excel.columns]
+archivo_salida = ruta_base / "resultado_cruce_excel_vs_sx_final.xlsx"
+df_excel[columnas_finales].to_excel(archivo_salida, index=False)
+
