@@ -1,0 +1,93 @@
+base = pd.read_csv('PFTIT597 - 2025-04-01.CSV', sep=';', encoding='latin1')
+base.drop(index=0, inplace=True)
+base.columns = base.columns.str.strip().str.replace(' ', '', regex=False)
+base.reset_index(drop=True, inplace=True)
+base['Precio'] = pd.to_numeric(base['Precio'].str.strip().str.replace(',', ''), errors='coerce').fillna(0)
+base
+
+#SX
+SX = pd.read_fwf('SX033125.001', widths=[7, 13, 12, 19, 8, 8, 10, 7, 4, 30, 11, 27, 31, 83], header=None)
+SX.drop(index=0, inplace=True)
+SX.drop(columns=0, inplace=True)
+SX.columns = ['A', 'id', 'B', 'C', 'fecha', 'D', 'E', 'F', 'G', 'importe', 'H', 'I', 'J']
+
+# SW - Cod. Bolsa
+SW = pd.read_fwf('SW033125.002', widths=[18, 12, 18], header=None)
+SW.drop(index=0, inplace=True)
+SW.columns = ['id', 'fecha', 'importe']
+SW['id'] = SW['id'].str[7:]
+SW['importe'] = SW['importe'].str[6:]
+SW['importe'] = SW['importe'].astype(str).str.lstrip('0').replace('', '0').astype(float)
+
+# MX - PRECIO SUCIO
+MX = pd.read_csv('MX033125.txt', sep=',', encoding='latin1')
+
+# titulos_participativos_valoracion
+titulos = pd.read_fwf('titulos_participativos_valoracion_20250331.txt', widths=[19, 12, 20], header=None)
+titulos.columns = ['id', 'fecha', 'importe']
+titulos['importe'] = titulos['importe'].apply(lambda x: f"{x:.6f}")
+titulos['id'] = titulos['id'].str[7:]
+
+
+
+
+# ---------------
+# SW
+sw_map = SW.set_index('id')['importe']
+base['CHECK_SW COD BOLSA'] = np.nan
+base.loc[
+    (base['Cod.Bolsa'].isin(sw_map.index)) & (base['Precio'] == base['Cod.Bolsa'].map(sw_map)),
+    'CHECK_SW COD BOLSA'
+] = base['Cod.Bolsa'].map(sw_map)
+
+
+
+# MX - TITULOS - SX
+base['CHECK ORIGEN'] = np.nan
+base['CHECK ISIN'] = np.nan
+
+# MX
+mx_map = MX.set_index('ISIN')['Precio Sucio']
+base.loc[
+    (base['ISIN'].isin(mx_map.index)) & (base['Precio'] == base['ISIN'].map(mx_map)),
+    'CHECK ORIGEN'
+] = 'MX'
+base.loc[
+    (base['ISIN'].isin(mx_map.index)) & (base['Precio'] == base['ISIN'].map(mx_map)),
+    'CHECK ISIN'
+] = base['ISIN'].map(mx_map)
+
+# TITULOS
+titulos_map = titulos.set_index('id')['importe']
+base.loc[
+    (base['CHECK ISIN'].isna()) & 
+    (base['ISIN'].isin(titulos_map.index)) & 
+    (base['Precio'] == base['ISIN'].map(titulos_map)),
+    'CHECK ORIGEN'
+] = base['CHECK ORIGEN'].fillna('') + ' titulos'
+base.loc[
+    (base['CHECK ISIN'].isna()) & 
+    (base['ISIN'].isin(titulos_map.index)) & 
+    (base['Precio'] == base['ISIN'].map(titulos_map)),
+    'CHECK ISIN'
+] = base['ISIN'].map(titulos_map)
+
+# SX
+sx_map = SX.set_index('id')['importe']
+base.loc[
+    (base['CHECK ISIN'].isna()) & 
+    (base['ISIN'].isin(sx_map.index)) & 
+    (base['Precio'] == base['ISIN'].map(sx_map)),
+    'CHECK ORIGEN'
+] = base['CHECK ORIGEN'].fillna('') + ' SX'
+base.loc[
+    (base['CHECK ISIN'].isna()) & 
+    (base['ISIN'].isin(sx_map.index)) & 
+    (base['Precio'] == base['ISIN'].map(sx_map)),
+    'CHECK ISIN'
+] = base['ISIN'].map(sx_map)
+
+# Limpieza final
+base['CHECK ORIGEN'] = base['CHECK ORIGEN'].str.strip()
+base['CHECK ISIN'] = base['CHECK ISIN'].fillna(0)
+base['CHECK_SW COD BOLSA'] = base['CHECK_SW COD BOLSA'].fillna(0)
